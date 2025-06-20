@@ -1,13 +1,12 @@
 from gevent import monkey
 monkey.patch_all()
 
-from flask import Flask, jsonify, Response, request, send_file, session, redirect, url_for, render_template
+from flask import Flask, jsonify, Response, request, session
 from flask_cors import CORS
 import cv2
 import numpy as np
 import threading
 import time
-import io
 import os
 import logging
 import datetime
@@ -19,14 +18,13 @@ MACHINE_ID_FILE = './machine_id.txt'
 
 class VideoStream:
     def __init__(self, stream_id, stream_name):
-        self.web = "http://120.92.91.171:30083/api"
         self.stream_id = stream_id
         self.name = stream_name
         self.running = False
         self.frame_buffers = [None, None]  # 双缓冲
         self.buffer_index = 0
         self.lock = threading.Lock()
-        self.session = requests.Session()  
+         
         
 
     def start(self):
@@ -88,6 +86,9 @@ class FlaskServer:
         self.app.secret_key = 'agilex'  # 暂时密钥
         self.socketio = SocketIO(self.app, cors_allowed_origins="*")
         CORS(self.app)
+
+        self.web = "http://120.92.91.171:30083/api"
+        self.session = requests.Session() 
         
         # 初始化日志
         self.init_logging()
@@ -183,7 +184,7 @@ class FlaskServer:
             return None
  
     def local_to_nas(self):
-        print(f"任务执行于: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        print(f"任务执行于: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
     def time_job(self):
         schedule.every().day.at("23:00").do(self.local_to_nas)
@@ -667,7 +668,7 @@ class FlaskServer:
     def run(self):
         self.upload_thread.start()
         """运行服务器"""
-        self.socketio.run(self.app, host='0.0.0.0', port=8080, debug=True)
+        self.socketio.run(self.app, host='0.0.0.0', port=8080, debug=False)
 
 
 
