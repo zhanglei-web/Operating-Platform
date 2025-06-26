@@ -13,6 +13,7 @@ import datetime
 from flask_socketio import SocketIO, emit
 import schedule
 import requests
+import json
 
 MACHINE_ID_FILE = './machine_id.txt'
 
@@ -272,26 +273,32 @@ class FlaskServer:
     
     def get_streams(self):
         try:
-            self.send_message_to_robot(self.robot_sid, message={'cmd': 'video_list'})
-            """获取可用视频流列表"""
-            now_time = time.time()
-            while True:
-                if 0 < self.video_timestamp - now_time < 2:
-                    response_data = {
+            response_data = {
                         "code": 200,
                         "data":self.video_list,
                         "msg":"success"
                     }
-                    return jsonify(response_data), 200
-                else:
-                    time.sleep(0.02)
-                if time.time() - now_time > 5: # 正式环境设为2.5超时
-                    response_data = {
-                        "code": 404,
-                        "data":{},
-                        "msg":"机器人响应超时"
-                    }
-                    return jsonify(response_data), 404          
+            return jsonify(response_data), 200
+            #self.send_message_to_robot(self.robot_sid, message={'cmd': 'video_list'})
+            """获取可用视频流列表"""
+            # now_time = time.time()
+            # while True:
+            #     if 0 < self.video_timestamp - now_time < 2:
+            #         response_data = {
+            #             "code": 200,
+            #             "data":self.video_list,
+            #             "msg":"success"
+            #         }
+            #         return jsonify(response_data), 200
+            #     else:
+            #         time.sleep(0.02)
+            #     if time.time() - now_time > 5: # 正式环境设为2.5超时
+            #         response_data = {
+            #             "code": 404,
+            #             "data":{},
+            #             "msg":"机器人响应超时"
+            #         }
+            #         return jsonify(response_data), 404          
         except Exception as e:
             response_data = {
                     "code": 500,
@@ -421,6 +428,8 @@ class FlaskServer:
     
     def init_streams(self):
         """初始化视频流"""
+        print("in init_streams")
+
         if 'streams' in self.video_list:
             for stream in self.video_list['streams']:
                 self.video_streams[stream['id']] = VideoStream(stream['id'], stream['name'])
@@ -604,12 +613,12 @@ class FlaskServer:
 
         if stream_id not in self.video_streams:
             logging.error(f"Invalid stream ID: {stream_id}")
-            return jsonify({"error": "无效的视频流ID"}), 400
+            return jsonify({"error": "无效的视频流ID"}), 401
 
         frame_data = request.get_data()
         if not frame_data:
             logging.error("No frame data received")
-            return jsonify({"error": "未接收到帧数据"}), 404
+            return jsonify({"error": "未接收到帧数据"}), 402
         
         try:
             # 可选：验证是否为 JPEG 数据
@@ -625,7 +634,12 @@ class FlaskServer:
     
     def robot_get_video_list(self):
         try:
-            self.video_list = request.get_json()
+            print(1)
+            new_list = request.get_json()
+            print(f"new_list: {new_list}")
+            self.video_list = json.loads(new_list)
+            print(f"self.video_list: {self.video_list}")
+
             self.video_timestamp = time.time()
             if not self.init_streams_flag:
                 self.init_streams()
