@@ -211,8 +211,8 @@ class FlaskServer:
                 self.upload_nas_flag = False
 
     def time_job(self):
-        schedule.every().day.at("23:00").do(self.local_to_nas)
-        print("定时任务已启动，每天23:00执行...")
+        schedule.every().day.at("20:00").do(self.local_to_nas)
+        print("定时任务已启动，每天20:00执行...")
         try:
             while True:
                 schedule.run_pending()
