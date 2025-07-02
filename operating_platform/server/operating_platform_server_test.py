@@ -91,8 +91,8 @@ class FlaskServer:
         self.socketio = SocketIO(self.app, cors_allowed_origins="*")
         CORS(self.app)
 
-        #self.web = "http://120.92.91.171:30083/api"
-        self.web = "http://172.16.17.253:8080/api"
+        self.web = "http://120.92.91.171:30083/api"
+        #self.web = "http://172.16.17.253:8080/api"
         self.session = requests.Session() 
         self.token = None
 
@@ -474,7 +474,7 @@ class FlaskServer:
     def start_collection(self):
         try:
             data = request.get_json()
-            data['mechine_id'] = get_machine_id()
+            data['machine_id'] = get_machine_id()
             self.task_steps = data
             now_time = time.time()
             self.send_message_to_robot(self.robot_sid, message={'cmd': 'start_collection','msg': data})
@@ -518,7 +518,7 @@ class FlaskServer:
             now_time = time.time()
             self.send_message_to_robot(self.robot_sid, message={'cmd': 'finish_collection'})
             while True:
-                if 0 < self.response_finish_collection["timestamp"] - now_time < 3:
+                if 0 < self.response_finish_collection["timestamp"] - now_time < 60:
                     if self.response_finish_collection['msg'] == "success":
                         response_data = {
                             "code": 200,
@@ -535,7 +535,7 @@ class FlaskServer:
                         return jsonify(response_data), 200
                 else:
                     time.sleep(0.02)
-                if time.time() - now_time > 5: # 正式环境设为2.5超时
+                if time.time() - now_time > 70: # 正式环境设为2.5超时
                     response_data = {
                             "code": 404,
                             "data":{},
@@ -693,7 +693,8 @@ class FlaskServer:
                     "task_id": data["task_id"],                 
                     "task_data_id": data["task_data_id"],           
                     "transfer_type": "local_to_nas" ,     
-                    "status" : "FAILED" 
+                    "status" : "FAILED",
+                    "expand": '{"nas_failed_msg":"网络通讯错误"}' 
                 }
             self.make_request_with_token('eai/dts/upload/complete',response_data)
             return jsonify({}), 200
@@ -740,9 +741,7 @@ class FlaskServer:
     
     def robot_get_video_list(self):
         try:
-            print(1)
             new_list = request.get_json()
-            print(f"new_list: {new_list}")
             self.video_list = json.loads(new_list)
             print(f"self.video_list: {self.video_list}")
 
@@ -757,6 +756,8 @@ class FlaskServer:
     def robot_response(self):
         try:
             data = request.get_json()
+            print('-----------------')
+            print(data)
             if data["cmd"] == "start_collection":
                 self.response_start_collection = {
                     "timestamp": time.time(),
