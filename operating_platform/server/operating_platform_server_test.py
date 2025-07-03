@@ -689,13 +689,22 @@ class FlaskServer:
     def upload_fail(self):
         try:
             data = request.get_json()
-            response_data = {
+            if data.get("expand"):
+                response_data = {
                     "task_id": data["task_id"],                 
                     "task_data_id": data["task_data_id"],           
                     "transfer_type": "local_to_nas" ,     
                     "status" : "FAILED",
-                    "expand": '{"nas_failed_msg":"网络通讯错误"}' 
+                    "expand": data['expand'] 
                 }
+            else:
+                response_data = {
+                        "task_id": data["task_id"],                 
+                        "task_data_id": data["task_data_id"],           
+                        "transfer_type": "local_to_nas" ,     
+                        "status" : "FAILED",
+                        "expand": '{"nas_failed_msg":"网络通讯错误"}' 
+                    }
             self.make_request_with_token('eai/dts/upload/complete',response_data)
             return jsonify({}), 200
         except Exception as e:
