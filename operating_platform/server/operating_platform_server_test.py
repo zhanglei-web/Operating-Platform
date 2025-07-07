@@ -16,7 +16,9 @@ from flask_socketio import SocketIO, emit
 import schedule
 import requests
 import json
+
 import upload_to_nas
+
 
 MACHINE_ID_FILE = './machine_id.txt'
 
@@ -92,9 +94,11 @@ class FlaskServer:
         CORS(self.app)
 
         self.web = "http://120.92.91.171:30083/api"
+
         #self.web = "http://172.16.17.253:8080/api"
         self.session = requests.Session() 
         self.token = None
+
 
         # 初始化日志
         self.init_logging()
@@ -110,8 +114,10 @@ class FlaskServer:
         self.init_streams_flag = False
         self.task_steps = {}
         self.upload_thread = threading.Thread(target=self.time_job, daemon=True)
+
         self.upload_nas_flag = False
         
+
         
         # 响应模板
         self.response_start_collection = {
@@ -147,8 +153,10 @@ class FlaskServer:
         # }
 
         data = {
+
             "username": "eai_data_collect",
             "password": "eai_collect@2025"
+
         }
         
         try:
@@ -159,6 +167,7 @@ class FlaskServer:
             if response.status_code == 200:
                 # 解析 JSON 响应
                 response_data = response.json()
+
                 print("登录云平台成功:", response_data)
                 self.token = response_data["token"]
                 return True
@@ -191,6 +200,7 @@ class FlaskServer:
             if response.status_code == 200:
                 print('---------------------------------------')
                 print(f"请求成功，响应：{response.json()}")
+
                 return response.json()
             else:
                 print(f"请求失败，状态码: {response.status_code}, 响应: {response.text}")
@@ -201,6 +211,7 @@ class FlaskServer:
  
     def local_to_nas(self):
         print(f"任务执行于: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+
         #time.sleep(5)
         if self.login():
             upload_to_nas.upload()
@@ -213,6 +224,7 @@ class FlaskServer:
     def time_job(self):
         schedule.every().day.at("20:00").do(self.local_to_nas)
         print("定时任务已启动，每天20:00执行...")
+
         try:
             while True:
                 schedule.run_pending()
@@ -350,7 +362,9 @@ class FlaskServer:
                         "data":{},
                         "msg":"无效的视频流ID"
                     }
+
                 return jsonify(response_data), 200
+
                 
             success = self.video_streams[stream_id].start()
             if success:
@@ -363,11 +377,13 @@ class FlaskServer:
                 return jsonify(response_data), 200
             else:
                 response_data = {
+
                     "code": 404,
                     "data":{},
                     "msg":"启动视频流失败"
                 }
                 return jsonify(response_data), 200
+
         except Exception as e:
             response_data = {
                     "code": 500,
@@ -386,7 +402,9 @@ class FlaskServer:
                     "data":{},
                     "msg":"无效的流ID,必须为数字"
                 }
+
             return jsonify(response_data), 200
+
         
         if stream_id not in self.video_streams:
             response_data = {
@@ -394,7 +412,9 @@ class FlaskServer:
                     "data":{},
                     "msg":"视频流不存在"
                 }
+
             return jsonify(response_data), 200
+
       
         if not self.video_streams[stream_id].running:
             response_data = {
@@ -402,7 +422,9 @@ class FlaskServer:
                     "data":{},
                     "msg":"视频流未开启"
                 }
+
             return jsonify(response_data), 200
+
         
         def generate():
             max_retries = 10  # 最大重试次数
@@ -437,7 +459,9 @@ class FlaskServer:
                     "data":{},
                     "msg":"无效的流ID,必须为数字"
                 }
+
             return jsonify(response_data), 200
+
         
         """停止指定视频流"""
         if stream_id not in self.video_streams:
@@ -446,7 +470,9 @@ class FlaskServer:
                     "data":{},
                     "msg":"视频流不存在"
                 }
+
             return jsonify(response_data), 200
+
             
         self.video_streams[stream_id].stop()
         self.stream_status[stream_id]["active"] = False
@@ -474,7 +500,9 @@ class FlaskServer:
     def start_collection(self):
         try:
             data = request.get_json()
+
             data['machine_id'] = get_machine_id()
+
             self.task_steps = data
             now_time = time.time()
             self.send_message_to_robot(self.robot_sid, message={'cmd': 'start_collection','msg': data})
@@ -493,7 +521,11 @@ class FlaskServer:
                             "data":{},
                             "msg":self.response_start_collection['msg']
                         }
+<<<<<<< dev
                         return jsonify(response_data), 200
+=======
+                        return jsonify(response_data), 404
+>>>>>>> dev-op
                 else:
                     time.sleep(0.02)
                 if time.time() - now_time > 5: # 正式环境设为2.5超时
@@ -502,7 +534,9 @@ class FlaskServer:
                             "data":{},
                             "msg":"机器人响应超时"
                         }
+
                     return jsonify(response_data), 200
+
 
         except Exception as e:
             response_data = {
@@ -532,16 +566,20 @@ class FlaskServer:
                             "data":{},
                             "msg":self.response_finish_collection['msg']
                         }
+
                         return jsonify(response_data), 200
                 else:
                     time.sleep(0.02)
                 if time.time() - now_time > 70: # 正式环境设为2.5超时
+
                     response_data = {
                             "code": 404,
                             "data":{},
                             "msg":"机器人响应超时"
                         }
+
                     return jsonify(response_data), 200
+
 
         except Exception as e:
             response_data = {
@@ -571,7 +609,9 @@ class FlaskServer:
                             "data":{},
                             "msg":self.response_discard_collection['msg']
                         }
+
                         return jsonify(response_data), 200
+
                 else:
                     time.sleep(0.02)
                 if time.time() - now_time > 5: # 正式环境设为2.5超时
@@ -580,7 +620,9 @@ class FlaskServer:
                             "data":{},
                             "msg":"机器人响应超时"
                         }
+
                     return jsonify(response_data), 200
+
 
         except Exception as e:
             response_data = {
@@ -610,7 +652,9 @@ class FlaskServer:
                             "data":{},
                             "msg":self.response_submit_collection['msg']
                         }
+
                         return jsonify(response_data), 200
+
                 else:
                     time.sleep(0.02)
                 if time.time() - now_time > 5: # 正式环境设为2.5超时
@@ -619,7 +663,9 @@ class FlaskServer:
                             "data":{},
                             "msg":"机器人响应超时"
                         }
+
                     return jsonify(response_data), 200
+
 
         except Exception as e:
             response_data = {
@@ -750,7 +796,9 @@ class FlaskServer:
     
     def robot_get_video_list(self):
         try:
+
             new_list = request.get_json()
+
             self.video_list = json.loads(new_list)
             print(f"self.video_list: {self.video_list}")
 
