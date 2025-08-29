@@ -1,3 +1,5 @@
+coding = "utf-8"
+
 from gevent import monkey
 monkey.patch_all()
 
@@ -14,6 +16,9 @@ from flask_socketio import SocketIO, emit
 import schedule
 import requests
 import json
+
+import upload_to_nas
+
 
 MACHINE_ID_FILE = './machine_id.txt'
 
@@ -89,8 +94,12 @@ class FlaskServer:
         CORS(self.app)
 
         self.web = "http://120.92.91.171:30083/api"
+
+        #self.web = "http://172.16.17.253:8080/api"
         self.session = requests.Session() 
-        
+        self.token = None
+
+
         # 初始化日志
         self.init_logging()
         
@@ -101,9 +110,14 @@ class FlaskServer:
         self.video_streams = {}
         self.stream_status = {}
         self.frame_lock = threading.Lock()
+        self.upload_lock = threading.Lock()  # 用于保护 self.upload_nas_flag 的访问
         self.init_streams_flag = False
         self.task_steps = {}
         self.upload_thread = threading.Thread(target=self.time_job, daemon=True)
+
+        self.upload_nas_flag = False
+        
+
         
         # 响应模板
         self.response_start_collection = {
@@ -139,8 +153,10 @@ class FlaskServer:
         # }
 
         data = {
-            "username": "liuxu",
-            "password": "xiaotouming"
+
+            "username": "eai_data_collect",
+            "password": "eai_collect@2025"
+
         }
         
         try:
@@ -151,31 +167,40 @@ class FlaskServer:
             if response.status_code == 200:
                 # 解析 JSON 响应
                 response_data = response.json()
-                print("登录成功:", response_data)
-                token = response_data["token"]
-                return response_data
+
+                print("登录云平台成功:", response_data)
+                self.token = response_data["token"]
+                return True
             else:
-                print(f"登录失败，状态码: {response.status_code}, 响应: {response.text}")
-                return None
+                print(f"登录云平台失败，状态码: {response.status_code}, 响应:")
+                return False
                 
         except requests.exceptions.RequestException as e:
-            print(f"请求异常: {e}")
-            return None
+            print(f"请求云平台异常: {e}")
+            return False
         
-    def make_request_with_token(self, token):
-        """发送带有 token 的请求"""
+    def make_request_with_token(self, path, data):
+        """发送带有 token 和请求体的请求"""
         if not self.token:
             print("未登录，无法发送请求")
             return None
- 
-        url = f"{self.web}/"
+    
+        url = f"{self.web}/{path}"
         headers = {
-            "Authorization": f"Bearer {token}"  # 假设使用 Bearer 认证方案
+            "Authorization": f"Bearer {self.token}",  # 假设使用 Bearer 认证方案
+            "Content-Type": "application/json"  # 确保服务器知道我们发送的是 JSON
         }
- 
+    
         try:
-            response = self.session.get(url, headers=headers)
+            if data:
+                print(data)
+                response = self.session.post(url, headers=headers, json=data)
+            else:
+                response = self.session.get(url, headers=headers)
             if response.status_code == 200:
+                print('---------------------------------------')
+                print(f"请求成功，响应：{response.json()}")
+
                 return response.json()
             else:
                 print(f"请求失败，状态码: {response.status_code}, 响应: {response.text}")
@@ -187,9 +212,19 @@ class FlaskServer:
     def local_to_nas(self):
         print(f"任务执行于: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
+        #time.sleep(5)
+        if self.login():
+            upload_to_nas.upload()
+            with self.upload_lock:
+                self.upload_nas_flag = False
+        else:
+            with self.upload_lock:
+                self.upload_nas_flag = False
+
     def time_job(self):
-        schedule.every().day.at("23:00").do(self.local_to_nas)
-        print("定时任务已启动，每天23:00执行...")
+        schedule.every().day.at("20:00").do(self.local_to_nas)
+        print("定时任务已启动，每天20:00执行...")
+
         try:
             while True:
                 schedule.run_pending()
@@ -229,6 +264,15 @@ class FlaskServer:
         self.app.add_url_rule('/api/finish_collection', 'finish_collection', self.finish_collection, methods=['POST'])
         self.app.add_url_rule('/api/discard_collection', 'discard_collection', self.discard_collection, methods=['POST'])
         self.app.add_url_rule('/api/submit_collection', 'submit_collection', self.submit_collection, methods=['POST'])
+
+        # 手动上传nas
+        self.app.add_url_rule('/api/manual_upload_nas', 'manual_upload_nas', self.manual_upload_nas, methods=['POST']) 
+
+        # nas上传反馈
+        self.app.add_url_rule('/api/upload_start', 'upload_start', self.upload_start, methods=['POST'])
+        self.app.add_url_rule('/api/upload_finish', 'upload_finish', self.upload_finish, methods=['POST'])
+        self.app.add_url_rule('/api/upload_fail', 'upload_fail', self.upload_fail, methods=['POST'])
+        self.app.add_url_rule('/api/upload_process', 'upload_process', self.upload_process, methods=['POST'])
        
         
         # 机器人接口
@@ -329,7 +373,9 @@ class FlaskServer:
                         "data":{},
                         "msg":"无效的视频流ID"
                     }
-                return jsonify(response_data), 404
+
+                return jsonify(response_data), 200
+
                 
             success = self.video_streams[stream_id].start()
             if success:
@@ -342,11 +388,13 @@ class FlaskServer:
                 return jsonify(response_data), 200
             else:
                 response_data = {
-                    "code": 500,
+
+                    "code": 404,
                     "data":{},
                     "msg":"启动视频流失败"
                 }
-                return jsonify(response_data), 500
+                return jsonify(response_data), 200
+
         except Exception as e:
             response_data = {
                     "code": 500,
@@ -365,7 +413,9 @@ class FlaskServer:
                     "data":{},
                     "msg":"无效的流ID,必须为数字"
                 }
-            return jsonify(response_data), 400
+
+            return jsonify(response_data), 200
+
         
         if stream_id not in self.video_streams:
             response_data = {
@@ -373,7 +423,9 @@ class FlaskServer:
                     "data":{},
                     "msg":"视频流不存在"
                 }
-            return jsonify(response_data), 404
+
+            return jsonify(response_data), 200
+
       
         if not self.video_streams[stream_id].running:
             response_data = {
@@ -381,7 +433,9 @@ class FlaskServer:
                     "data":{},
                     "msg":"视频流未开启"
                 }
-            return jsonify(response_data), 404
+
+            return jsonify(response_data), 200
+
         
         def generate():
             max_retries = 10  # 最大重试次数
@@ -416,7 +470,9 @@ class FlaskServer:
                     "data":{},
                     "msg":"无效的流ID,必须为数字"
                 }
-            return jsonify(response_data), 400
+
+            return jsonify(response_data), 200
+
         
         """停止指定视频流"""
         if stream_id not in self.video_streams:
@@ -425,7 +481,9 @@ class FlaskServer:
                     "data":{},
                     "msg":"视频流不存在"
                 }
-            return jsonify(response_data), 404
+
+            return jsonify(response_data), 200
+
             
         self.video_streams[stream_id].stop()
         self.stream_status[stream_id]["active"] = False
@@ -453,7 +511,9 @@ class FlaskServer:
     def start_collection(self):
         try:
             data = request.get_json()
+
             data['machine_id'] = get_machine_id()
+
             self.task_steps = data
             now_time = time.time()
             self.send_message_to_robot(self.robot_sid, message={'cmd': 'start_collection','msg': data})
@@ -472,7 +532,11 @@ class FlaskServer:
                             "data":{},
                             "msg":self.response_start_collection['msg']
                         }
+<<<<<<< dev
+                        return jsonify(response_data), 200
+=======
                         return jsonify(response_data), 404
+>>>>>>> dev-op
                 else:
                     time.sleep(0.02)
                 if time.time() - now_time > 5: # 正式环境设为2.5超时
@@ -481,7 +545,9 @@ class FlaskServer:
                             "data":{},
                             "msg":"机器人响应超时"
                         }
-                    return jsonify(response_data), 404
+
+                    return jsonify(response_data), 200
+
 
         except Exception as e:
             response_data = {
@@ -497,7 +563,7 @@ class FlaskServer:
             now_time = time.time()
             self.send_message_to_robot(self.robot_sid, message={'cmd': 'finish_collection'})
             while True:
-                if 0 < self.response_finish_collection["timestamp"] - now_time < 3:
+                if 0 < self.response_finish_collection["timestamp"] - now_time < 60:
                     if self.response_finish_collection['msg'] == "success":
                         response_data = {
                             "code": 200,
@@ -511,16 +577,20 @@ class FlaskServer:
                             "data":{},
                             "msg":self.response_finish_collection['msg']
                         }
-                        return jsonify(response_data), 404
+
+                        return jsonify(response_data), 200
                 else:
                     time.sleep(0.02)
-                if time.time() - now_time > 5: # 正式环境设为2.5超时
+                if time.time() - now_time > 70: # 正式环境设为2.5超时
+
                     response_data = {
                             "code": 404,
                             "data":{},
                             "msg":"机器人响应超时"
                         }
-                    return jsonify(response_data), 404
+
+                    return jsonify(response_data), 200
+
 
         except Exception as e:
             response_data = {
@@ -550,7 +620,9 @@ class FlaskServer:
                             "data":{},
                             "msg":self.response_discard_collection['msg']
                         }
-                        return jsonify(response_data), 404
+
+                        return jsonify(response_data), 200
+
                 else:
                     time.sleep(0.02)
                 if time.time() - now_time > 5: # 正式环境设为2.5超时
@@ -559,7 +631,9 @@ class FlaskServer:
                             "data":{},
                             "msg":"机器人响应超时"
                         }
-                    return jsonify(response_data), 404
+
+                    return jsonify(response_data), 200
+
 
         except Exception as e:
             response_data = {
@@ -589,7 +663,9 @@ class FlaskServer:
                             "data":{},
                             "msg":self.response_submit_collection['msg']
                         }
-                        return jsonify(response_data), 404
+
+                        return jsonify(response_data), 200
+
                 else:
                     time.sleep(0.02)
                 if time.time() - now_time > 5: # 正式环境设为2.5超时
@@ -598,7 +674,9 @@ class FlaskServer:
                             "data":{},
                             "msg":"机器人响应超时"
                         }
-                    return jsonify(response_data), 404
+
+                    return jsonify(response_data), 200
+
 
         except Exception as e:
             response_data = {
@@ -613,6 +691,90 @@ class FlaskServer:
             return jsonify({"error": "Unauthorized"}), 401
         pass
 
+    def manual_upload_nas(self):
+        try:
+             with self.upload_lock:  # 使用 upload_lock 来保护 self.upload_nas_flag
+                if self.upload_nas_flag:
+                    response_data = {
+                        "code": 401,
+                        "data": {},
+                        "msg": '数据上传中'
+                    }
+                    return jsonify(response_data), 200
+                else:
+                    self.upload_nas_flag = True
+                    upload_manual_thread = threading.Thread(target=self.local_to_nas,daemon=True)
+                    upload_manual_thread.start()
+                    response_data = {
+                        "code": 200,
+                        "data": {},
+                        "msg": 'success'
+                    }
+                    return jsonify(response_data), 200
+        except Exception as e:
+            response_data = {
+                    "code": 500,
+                    "data":{},
+                    "msg":str(e)
+                }
+            return jsonify(response_data), 500
+
+    # ---------------------------------------upload----------------------------------------------
+    def upload_start(self):
+        try:
+            data = request.get_json()
+            data['transfer_type'] = 'local_to_nas'
+            self.make_request_with_token('eai/dts/upload/start',data)
+            return jsonify({}), 200
+        except Exception as e:
+            return jsonify({'error':str(e)}), 500
+
+    def upload_finish(self):
+        try:
+            data = request.get_json()
+            response_data = {
+                    "task_id": data["task_id"],                 
+                    "task_data_id": data["task_data_id"],           
+                    "transfer_type": "local_to_nas" ,     
+                    "status" : "SUCCESS" 
+                }
+            self.make_request_with_token('eai/dts/upload/complete',response_data)
+            return jsonify({}), 200
+        except Exception as e:
+            return jsonify({'error':str(e)}), 500
+    
+    def upload_fail(self):
+        try:
+            data = request.get_json()
+            if data.get("expand"):
+                response_data = {
+                    "task_id": data["task_id"],                 
+                    "task_data_id": data["task_data_id"],           
+                    "transfer_type": "local_to_nas" ,     
+                    "status" : "FAILED",
+                    "expand": data['expand'] 
+                }
+            else:
+                response_data = {
+                        "task_id": data["task_id"],                 
+                        "task_data_id": data["task_data_id"],           
+                        "transfer_type": "local_to_nas" ,     
+                        "status" : "FAILED",
+                        "expand": '{"nas_failed_msg":"网络通讯错误"}' 
+                    }
+            self.make_request_with_token('eai/dts/upload/complete',response_data)
+            return jsonify({}), 200
+        except Exception as e:
+            return jsonify({'error':str(e)}), 500
+
+    def upload_process(self):
+        try:
+            data = request.get_json()
+            data['transfer_type'] = 'local_to_nas'
+            self.make_request_with_token('eai/dts/upload/process',data)
+            return jsonify({}), 200
+        except Exception as e:
+            return jsonify({'error':str(e)}), 500
 
     # ---------------------------------------robot------------------------------------------------
     def update_frame(self, stream_id):
@@ -645,9 +807,9 @@ class FlaskServer:
     
     def robot_get_video_list(self):
         try:
-            print(1)
+
             new_list = request.get_json()
-            print(f"new_list: {new_list}")
+
             self.video_list = json.loads(new_list)
             print(f"self.video_list: {self.video_list}")
 
@@ -662,6 +824,8 @@ class FlaskServer:
     def robot_response(self):
         try:
             data = request.get_json()
+            print('-----------------')
+            print(data)
             if data["cmd"] == "start_collection":
                 self.response_start_collection = {
                     "timestamp": time.time(),
