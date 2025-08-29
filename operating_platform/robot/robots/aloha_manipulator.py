@@ -6,6 +6,7 @@ import os
 import ctypes
 import platform
 import sys
+import zmq
 
 import numpy as np
 import torch
@@ -13,11 +14,10 @@ import torch
 from concurrent.futures import ThreadPoolExecutor
 from collections import deque
 from functools import cache
+from typing import Any
 
 import threading
 import cv2
-
-import zmq
 
 
 from operating_platform.robot.robots.utils import RobotDeviceNotConnectedError
@@ -27,28 +27,53 @@ from operating_platform.robot.robots.com_configs.cameras import CameraConfig, Op
 from operating_platform.robot.robots.camera import Camera
 
 
+recv_images = {}
+recv_master_jointstats = {}
+recv_follower_jointstats = {}
+recv_follower_pose = {}
+lock = threading.Lock()  # 线程锁
 
 # IPC Address
 ipc_address = "ipc:///tmp/dora-zeromq"
+ipc_address_piper = "ipc:///tmp/dorobot-piper"
 
 context = zmq.Context()
-socket = context.socket(zmq.PAIR)
-socket.connect(ipc_address)
-socket.setsockopt(zmq.RCVTIMEO, 300)  # 设置接收超时（毫秒）
+running_recv_image_server = True
+running_recv_piper_server = True
 
-running_server = True
-recv_images = {}  # 缓存每个 event_id 的最新帧
-recv_jointstats = {} 
-recv_pose = {}
-recv_gripper = {}
-lock = threading.Lock()  # 线程锁
+socket_image = context.socket(zmq.PAIR)
+socket_image.connect(ipc_address)
+socket_image.setsockopt(zmq.SNDHWM, 2000)
+socket_image.setsockopt(zmq.SNDBUF, 2**25)
+socket_image.setsockopt(zmq.SNDTIMEO, 2000)
+socket_image.setsockopt(zmq.RCVTIMEO, 2000)  # 设置接收超时（毫秒）
+socket_image.setsockopt(zmq.LINGER, 0)
 
-def recv_server():
+socket_piper = context.socket(zmq.PAIR)
+socket_piper.connect(ipc_address_piper)
+socket_piper.setsockopt(zmq.SNDHWM, 2000)
+socket_piper.setsockopt(zmq.SNDBUF, 2**25)
+socket_piper.setsockopt(zmq.SNDTIMEO, 2000)
+socket_piper.setsockopt(zmq.RCVTIMEO, 2000)  # 设置接收超时（毫秒）
+socket_piper.setsockopt(zmq.LINGER, 0)
+
+def piper_zmq_send(event_id, buffer, wait_time_s):
+    buffer_bytes = buffer.tobytes()
+    print(f"zmq send event_id:{event_id}, value:{buffer}")
+    try:
+        socket_piper.send_multipart([
+            event_id.encode('utf-8'),
+            buffer_bytes
+        ], flags=zmq.NOBLOCK)
+    except zmq.Again:
+        pass
+    time.sleep(wait_time_s)
+
+def recv_img_server():
     """接收数据线程"""
-    while running_server:
+    while running_recv_image_server:
         try:
-
-            message_parts = socket.recv_multipart()
+            message_parts = socket_image.recv_multipart()
             if len(message_parts) < 2:
                 continue  # 协议错误
 
@@ -63,36 +88,49 @@ def recv_server():
                 
                 if frame is not None:
                     with lock:
-                        # print(f"Received event_id = {event_id}")
                         recv_images[event_id] = frame
 
-            if 'jointstat' in event_id:
+        except zmq.Again:
+            print(f"Manipulator Receive Image Timeout")
+            continue
+        except Exception as e:
+            print("Manipulator Receive Image Recv Error:", e)
+            break
+
+def recv_piper_server():
+    """接收数据线程"""
+    while running_recv_piper_server:
+        try:
+            message_parts = socket_piper.recv_multipart()
+            if len(message_parts) < 2:
+                continue  # 协议错误
+
+            event_id = message_parts[0].decode('utf-8')
+            buffer_bytes = message_parts[1]
+
+            if 'jointstat' in event_id and 'master' in event_id:
                 joint_array = np.frombuffer(buffer_bytes, dtype=np.float32)
                 if joint_array is not None:
                     with lock:
-                        # print(f"Received event_id = {event_id}")
-                        # print(f"Received joint_array = {joint_array}")
-                        recv_jointstats[event_id] = joint_array
+                        recv_master_jointstats[event_id] = joint_array
 
-            if 'pose' in event_id:
+            if 'jointstat' in event_id and 'follower' in event_id:
+                joint_array = np.frombuffer(buffer_bytes, dtype=np.float32)
+                if joint_array is not None:
+                    with lock:
+                        recv_follower_jointstats[event_id] = joint_array
+
+            if 'endpose' in event_id and 'follower' in event_id:
                 pose_array = np.frombuffer(buffer_bytes, dtype=np.float32)
                 if pose_array is not None:
                     with lock:
-                        recv_pose[event_id] = pose_array
-
-            if 'gripper' in event_id:
-                gripper_array = np.frombuffer(buffer_bytes, dtype=np.float32)
-                if gripper_array is not None:
-                    with lock:
-                        recv_gripper[event_id] = gripper_array
-
+                        recv_follower_pose[event_id] = pose_array
 
         except zmq.Again:
-            # 接收超时，继续循环
-            print(f"Received Timeout")
+            print(f"Manipulator Receive Piper Timeout")
             continue
         except Exception as e:
-            print("recv error:", e)
+            print("Manipulator Receive Piper Recv Error:", e)
             break
 
 
@@ -146,15 +184,20 @@ class AlohaManipulator:
         self.config = config
         self.robot_type = self.config.type
 
+        self.use_videos = self.config.use_videos
 
         self.follower_arms = {}
         self.follower_arms['right'] = self.config.right_leader_arm.motors
         self.follower_arms['left'] = self.config.left_leader_arm.motors
 
         self.cameras = make_cameras_from_configs(self.config.cameras)
+        self.microphones = self.config.microphones
 
-        recv_thread = threading.Thread(target=recv_server, daemon=True)
-        recv_thread.start()
+        self.recv_img_thread = threading.Thread(target=recv_img_server, daemon=True)
+        self.recv_img_thread.start()
+
+        self.recv_piper_thread = threading.Thread(target=recv_piper_server, daemon=True)
+        self.recv_piper_thread.start()
         
         self.is_connected = False
         self.logs = {}
@@ -214,7 +257,7 @@ class AlohaManipulator:
         while True:
             # 检查是否已获取所有机械臂的关节角度
             if any(
-                any(name in key for key in recv_jointstats)
+                any(name in key for key in recv_follower_jointstats)
                 for name in self.follower_arms
             ):
                 break
@@ -229,7 +272,7 @@ class AlohaManipulator:
         start_time = time.perf_counter()
         while True:
             if any(
-                any(name in key for key in recv_pose)
+                any(name in key for key in recv_follower_pose)
                 for name in self.follower_arms
             ):
                 break
@@ -241,20 +284,20 @@ class AlohaManipulator:
             # 可选：减少CPU占用
             time.sleep(0.01)
 
-        start_time = time.perf_counter()
-        while True:
-            if any(
-                any(name in key for key in recv_gripper)
-                for name in self.follower_arms
-            ):
-                break
+        # start_time = time.perf_counter()
+        # while True:
+        #     if any(
+        #         any(name in key for key in recv_follower_gripper)
+        #         for name in self.follower_arms
+        #     ):
+        #         break
 
-            # 超时检测
-            if time.perf_counter() - start_time > timeout:
-                raise TimeoutError("等待机械臂夹爪超时")
+        #     # 超时检测
+        #     if time.perf_counter() - start_time > timeout:
+        #         raise TimeoutError("等待机械臂夹爪超时")
 
-            # 可选：减少CPU占用
-            time.sleep(0.01)
+        #     # 可选：减少CPU占用
+        #     time.sleep(0.01)
 
         self.is_connected = True
     
@@ -269,6 +312,108 @@ class AlohaManipulator:
     @property
     def num_cameras(self):
         return len(self.cameras)
+    
+    def follower_record(self):
+        follower_joint = {}
+        for name in self.follower_arms:
+            for match_name in recv_follower_jointstats:
+                if name in match_name:
+                    now = time.perf_counter()
+
+                    byte_array = np.zeros(6, dtype=np.float32)
+                    joint_read = recv_follower_jointstats[match_name]
+
+                    byte_array[:6] = joint_read[:6]
+                    byte_array = np.round(byte_array, 3)
+                    
+                    follower_joint[name] = torch.from_numpy(byte_array)
+
+                    self.logs[f"read_follower_{name}_joint_dt_s"] = time.perf_counter() - now
+
+        follower_pos = {}
+        for name in self.follower_arms:
+            for match_name in recv_follower_pose:
+                if name in match_name:
+                    now = time.perf_counter()
+
+                    byte_array = np.zeros(6, dtype=np.float32)
+                    pose_read = recv_follower_pose[match_name]
+
+                    byte_array[:6] = pose_read[:]
+                    byte_array = np.round(byte_array, 3)
+                    
+                    follower_pos[name] = torch.from_numpy(byte_array)
+
+                    self.logs[f"read_follower_{name}_pos_dt_s"] = time.perf_counter() - now
+
+        follower_gripper = {}
+        for name in self.follower_arms:
+            for match_name in recv_follower_jointstats:
+                if name in match_name:
+                    now = time.perf_counter()
+
+                    byte_array = np.zeros(1, dtype=np.float32)
+                    gripper_read = recv_follower_jointstats[match_name][6]
+
+                    byte_array[0] = gripper_read
+                    byte_array = np.round(byte_array, 3)
+                    
+                    follower_gripper[name] = torch.from_numpy(byte_array)
+
+                    self.logs[f"read_follower_{name}_gripper_dt_s"] = time.perf_counter() - now
+        
+        return follower_joint, follower_pos, follower_gripper
+    
+    def master_record(self):
+        master_joint = {}
+        for name in self.follower_arms:
+            for match_name in recv_master_jointstats:
+                if name in match_name:
+                    now = time.perf_counter()
+
+                    byte_array = np.zeros(6, dtype=np.float32)
+                    joint_read = recv_master_jointstats[match_name]
+
+                    byte_array[:6] = joint_read[:6]
+                    byte_array = np.round(byte_array, 3)
+                    
+                    master_joint[name] = torch.from_numpy(byte_array)
+
+                    self.logs[f"read_master_{name}_joint_dt_s"] = time.perf_counter() - now
+
+        # master_pos = {}
+        # for name in self.follower_arms:
+        #     for match_name in recv_master_pose:
+        #         if name in match_name:
+        #             now = time.perf_counter()
+
+        #             byte_array = np.zeros(6, dtype=np.float32)
+        #             pose_read = recv_master_pose[match_name]
+
+        #             byte_array[:6] = pose_read[:]
+        #             byte_array = np.round(byte_array, 3)
+                    
+        #             master_pos[name] = torch.from_numpy(byte_array)
+
+        #             self.logs[f"read_master_{name}_pos_dt_s"] = time.perf_counter() - now
+
+        master_gripper = {}
+        for name in self.follower_arms:
+            for match_name in recv_master_jointstats:
+                if name in match_name:
+                    now = time.perf_counter()
+
+                    byte_array = np.zeros(1, dtype=np.float32)
+                    gripper_read = recv_master_jointstats[match_name][6]
+
+                    byte_array[0] = gripper_read
+                    byte_array = np.round(byte_array, 3)
+                    
+                    master_gripper[name] = torch.from_numpy(byte_array)
+
+                    self.logs[f"read_master_{name}_gripper_dt_s"] = time.perf_counter() - now
+        
+        return master_joint, master_gripper
 
     def teleop_step(
         self, record_data=False, 
@@ -280,101 +425,13 @@ class AlohaManipulator:
                 "Aloha is not connected. You need to run `robot.connect()`."
             )
 
-        # for name in self.leader_arms:
-        #     # if name == "left":
-        #     #     continue
-        #     # 读取领导臂电机数据
-        #     read_start = time.perf_counter()
-        #     leader_pos = self.leader_arms[name].async_read("Present_Position")
-        #     # self.follower_arms[name].leader_pos = leader_pos
-        #     self.logs[f"read_leader_{name}_pos_dt_s"] = time.perf_counter() - read_start
-
-        #     # 电机数据到关节角度的转换，关节角度处理（向量化操作）
-        #     for i in range(7):
-        #         # 数值转换
-        #         value = round(leader_pos[i] * SCALE_FACTOR, 2)
-
-        #         # 特定关节取反（3号和5号）
-        #         if i in {3, 5}:
-        #             value = -value
-
-        #         # 限幅
-        #         clamped_value = max(self.follower_arms[name].joint_n_limit[i], min(self.follower_arms[name].joint_p_limit[i], value))
-
-        #         # 移动平均滤波
-        #         # filter_value = self.follower_arms[name].filters[i].update(clamped_value)
-
-        #         # if abs(filter_value - self.filters[i].get_last()) / WINDOW_SIZE > 180 ##超180度/s位移限制，暂时不弄
-
-        #         # 直接使用内存视图操作
-
-        #         # self.follower_arms[name].joint_teleop_write[i] = filter_value
-        #         self.follower_arms[name].joint_teleop_write[i] = clamped_value
-
-        #     # 电机角度到夹爪开合度的换算
-        #     giper_value = leader_pos[7] * GRIPPER_SCALE
-        #     self.follower_arms[name].clipped_gripper = max(0, min(100, int(giper_value)))
-
-        #     # 机械臂执行动作（调用透传API，控制gen72移动到目标位置）
-        #     write_start = time.perf_counter()
-        #     self.follower_arms[name].movej_canfd(self.follower_arms[name].joint_teleop_write)
-        #     if self.frame_counter % 5 == 0:
-        #         self.frame_counter = 0
-        #         self.follower_arms[name].write_single_register(self.follower_arms[name].clipped_gripper)
-        #     self.logs[f"write_follower_{name}_goal_pos_dt_s"] = time.perf_counter() - write_start
-
-        # print("end teleoperate")
-
         if not record_data:
             return
 
-        follower_joint = {}
-        for name in self.follower_arms:
-            for match_name in recv_jointstats:
-                if name in match_name:
-                    now = time.perf_counter()
+        follower_joint, follower_pos, follower_gripper = self.follower_record()
 
-                    byte_array = np.zeros(6, dtype=np.float32)
-                    joint_read = recv_jointstats[match_name]
-
-                    byte_array[:6] = joint_read[:6]
-                    byte_array = np.round(byte_array, 3)
-                    
-                    follower_joint[name] = torch.from_numpy(byte_array)
-
-                    self.logs[f"read_follower_{name}_joint_dt_s"] = time.perf_counter() - now
-
-        follower_pos = {}
-        for name in self.follower_arms:
-            for match_name in recv_pose:
-                if name in match_name:
-                    now = time.perf_counter()
-
-                    byte_array = np.zeros(6, dtype=np.float32)
-                    pose_read = recv_pose[match_name]
-
-                    byte_array[:6] = pose_read[:]
-                    byte_array = np.round(byte_array, 3)
-                    
-                    follower_pos[name] = torch.from_numpy(byte_array)
-
-                    self.logs[f"read_follower_{name}_pos_dt_s"] = time.perf_counter() - now
-
-        follower_gripper = {}
-        for name in self.follower_arms:
-            for match_name in recv_gripper:
-                if name in match_name:
-                    now = time.perf_counter()
-
-                    byte_array = np.zeros(1, dtype=np.float32)
-                    gripper_read = recv_gripper[match_name]
-
-                    byte_array[:1] = gripper_read[:]
-                    byte_array = np.round(byte_array, 3)
-                    
-                    follower_gripper[name] = torch.from_numpy(byte_array)
-
-                    self.logs[f"read_follower_{name}_gripper_dt_s"] = time.perf_counter() - now
+        # master_joint, master_pos, master_gripper = self.master_record()
+        master_joint, master_gripper = self.master_record()
 
         #记录当前关节角度
         state = []
@@ -390,12 +447,12 @@ class AlohaManipulator:
         #将关节目标位置添加到 action 列表中
         action = []
         for name in self.follower_arms:
-            if name in follower_joint:
-                action.append(follower_joint[name])
+            if name in master_joint:
+                action.append(master_joint[name])
             if name in follower_pos:
                 action.append(follower_pos[name])
-            if name in follower_gripper:
-                action.append(follower_gripper[name])
+            if name in master_gripper:
+                action.append(master_gripper[name])
         action = torch.cat(action)
 
         # Capture images from cameras
@@ -525,46 +582,70 @@ class AlohaManipulator:
 
 
 
-    # def send_action(self, action: torch.Tensor):
-    #     """The provided action is expected to be a vector."""
-    #     if not self.is_connected:
-    #         raise RobotDeviceNotConnectedError(
-    #             "KochRobot is not connected. You need to run `robot.connect()`."
-    #         )
-    #     from_idx = 0
-    #     to_idx = 8
-    #     index = 0
-    #     action_sent = []
-    #     for name in self.follower_arms:
+    def send_action(self, action: dict[str, Any]):
+        """The provided action is expected to be a vector."""
+        if not self.is_connected:
+            raise RobotDeviceNotConnectedError(
+                "KochRobot is not connected. You need to run `robot.connect()`."
+            )
 
-    #         goal_pos = action[index*8+from_idx:index*8+to_idx]
-    #         index+=1
+        # from_idx = 0
+        # to_idx = 6
+        # arm_action_dim = 13
+        # arm_index = 0
+        # action_sent = []
+        for name in self.follower_arms:
+            goal_joint = [ val for key, val in action.items() if name in key and "joint" in key]
+            goal_gripper = [ val for key, val in action.items() if name in key and "gripper" in key]
 
-    #         for i in range(7):
-    #             self.follower_arms[name].joint_send[i] = max(self.follower_arms[name].joint_n_limit[i], min(self.follower_arms[name].joint_p_limit[i], goal_pos[i]))
+            # goal_joint = action[(arm_index*arm_action_dim+from_idx):(arm_index*arm_action_dim+to_idx)]
+            # goal_gripper = action[arm_index*arm_action_dim + 12]
+            # arm_index += 1
+            goal_joint_numpy = np.array([t.item() for t in goal_joint], dtype=np.float32)
+            goal_gripper_numpy = np.array([t.item() for t in goal_gripper], dtype=np.float32)
+            position = np.concatenate([goal_joint_numpy, goal_gripper_numpy], axis=0)
+
+            piper_zmq_send(f"action_joint_{name}", position, wait_time_s=0.01)
+            # piper_zmq_send(f"action_gripper_{name}", goal_gripper_numpy, wait_time_s=0.01)
+
+            # action_sent.append(goal_joint)
+
+        # return torch.cat(action_sent)
+
+        # from_idx = 0
+        # to_idx = 8
+        # index = 0
+        # action_sent = []
+        # for name in self.follower_arms:
+
+        #     goal_pos = action[index*8+from_idx:index*8+to_idx]
+        #     index+=1
+
+        #     for i in range(7):
+        #         self.follower_arms[name].joint_send[i] = max(self.follower_arms[name].joint_n_limit[i], min(self.follower_arms[name].joint_p_limit[i], goal_pos[i]))
             
             
-    #         self.follower_arms[name].movej_canfd(self.follower_arms[name].joint_send)
-    #         # if (goal_pos[7]<50):
-    #         #     # ret_giper = self.pDll.Write_Single_Register(self.nSocket, 1, 40000, int(follower_goal_pos_array[7]), 1, 1)
-    #         #     ret_giper = self.pDll.Write_Single_Register(self.nSocket, 1, 40000, 0 , 1, 1)
-    #         #     self.gipflag_send=0
-    #         # #状态为闭合，且需要张开夹爪
-    #         # if (goal_pos[7]>=50):
-    #         #     # ret_giper = self.pDll.Write_Single_Register(self.nSocket, 1, 40000, int(follower_goal_pos_array[7]), 1, 1)
-    #         #     ret_giper = self.pDll.Write_Single_Register(self.nSocket, 1, 40000, 100, 1, 1)
-    #         #     self.gipflag_send=1
-    #         gripper_value = max(0, min(100, int(goal_pos[7])))
+        #     self.follower_arms[name].movej_canfd(self.follower_arms[name].joint_send)
+        #     # if (goal_pos[7]<50):
+        #     #     # ret_giper = self.pDll.Write_Single_Register(self.nSocket, 1, 40000, int(follower_goal_pos_array[7]), 1, 1)
+        #     #     ret_giper = self.pDll.Write_Single_Register(self.nSocket, 1, 40000, 0 , 1, 1)
+        #     #     self.gipflag_send=0
+        #     # #状态为闭合，且需要张开夹爪
+        #     # if (goal_pos[7]>=50):
+        #     #     # ret_giper = self.pDll.Write_Single_Register(self.nSocket, 1, 40000, int(follower_goal_pos_array[7]), 1, 1)
+        #     #     ret_giper = self.pDll.Write_Single_Register(self.nSocket, 1, 40000, 100, 1, 1)
+        #     #     self.gipflag_send=1
+        #     gripper_value = max(0, min(100, int(goal_pos[7])))
 
-    #         self.frame_counter += 1
+        #     self.frame_counter += 1
 
-    #         self.follower_arms[name].old_grasp = gripper_value
-    #         if self.frame_counter % 5 == 0:
-    #             self.frame_counter = 0
-    #             self.follower_arms[name].write_single_register(gripper_value)
-    #         action_sent.append(goal_pos)
+        #     self.follower_arms[name].old_grasp = gripper_value
+        #     if self.frame_counter % 5 == 0:
+        #         self.frame_counter = 0
+        #         self.follower_arms[name].write_single_register(gripper_value)
+        #     action_sent.append(goal_pos)
 
-    #     return torch.cat(action_sent)
+        # return torch.cat(action_sent)
 
     def disconnect(self):
         if not self.is_connected:
@@ -582,7 +663,20 @@ class AlohaManipulator:
         #     self.cameras[name].disconnect()
 
         self.is_connected = False
-        running_server = False
+        
+        global running_recv_image_server
+        global running_recv_piper_server
+
+        running_recv_image_server = False
+        running_recv_piper_server = False
+
+        self.recv_img_thread.join()
+        self.recv_piper_thread.join()
+
+        socket_image.close()
+        socket_piper.close()
+
+        context.term()
         
 
     def __del__(self):

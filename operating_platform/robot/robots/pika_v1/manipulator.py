@@ -234,6 +234,7 @@ class PikaV1Manipulator:
         self.follower_arms['left'] = self.config.left_leader_arm.motors
 
         self.cameras = make_cameras_from_configs(self.config.cameras)
+        self.microphones = self.config.microphones
         
         self.connect_excluded_cameras = ["image_pika_pose"]
 
@@ -270,6 +271,18 @@ class PikaV1Manipulator:
         return cam_ft
     
     @property
+    def microphone_features(self) -> dict:
+        mic_ft = {}
+        for mic_key, mic in self.microphones.items():
+            key = f"observation.audio.{mic_key}"
+            mic_ft[key] = {
+                "shape": (1,),
+                "names": ["channels"],
+                "info": None,
+            }
+        return mic_ft
+    
+    @property
     def motor_features(self) -> dict:
         action_names = self.get_motor_names(self.follower_arms)
         state_names = self.get_motor_names(self.follower_arms)
@@ -298,7 +311,7 @@ class PikaV1Manipulator:
                 "等待摄像头图像超时"
             ),
             (
-                lambda: any(
+                lambda: all(
                     any(name in key for key in recv_rotation)
                     for name in self.follower_arms
                 ),
@@ -306,7 +319,7 @@ class PikaV1Manipulator:
                 "等待旋转角度数据超时"
             ),
             (
-                lambda: any(
+                lambda: all(
                     any(name in key for key in recv_pose)
                     for name in self.follower_arms
                 ),
@@ -314,7 +327,7 @@ class PikaV1Manipulator:
                 "等待机械臂末端位姿超时"
             ),
             (
-                lambda: any(
+                lambda: all(
                     any(name in key for key in recv_gripper)
                     for name in self.follower_arms
                 ),
@@ -376,6 +389,72 @@ class PikaV1Manipulator:
             # 减少 CPU 占用
             time.sleep(0.01)
 
+        # ===== 新增成功打印逻辑 =====
+        success_messages = []
+        # 摄像头连接状态
+        if conditions[0][0]():
+            cam_received = [name for name in self.cameras 
+                        if name in recv_images and name not in self.connect_excluded_cameras]
+            success_messages.append(f"摄像头: {', '.join(cam_received)}")
+        
+        # 机械臂数据状态
+        arm_data_types = ["旋转角度", "末端位姿", "夹爪状态"]
+        for i, data_type in enumerate(arm_data_types, 1):
+            if conditions[i][0]():
+                arm_received = [name for name in self.follower_arms 
+                            if any(name in key for key in (recv_rotation, recv_pose, recv_gripper)[i-1])]
+                success_messages.append(f"{data_type}: {', '.join(arm_received)}")
+        
+        # 打印成功连接信息
+        print("\n[连接成功] 所有设备已就绪:")
+        for msg in success_messages:
+            print(f"  - {msg}")
+        print(f"  总耗时: {time.perf_counter() - start_time:.2f}秒\n")
+        # ===========================
+
+        print("\nPika获取初始位姿和旋转角度中...请将Pika双爪都平行正放, 夹爪朝向前方。")
+        while True:
+            follower_pos = {}
+            for name in self.follower_arms:
+                for match_name in recv_pose:
+                    if name in match_name:
+                        byte_array = np.zeros(3, dtype=np.float32)
+                        pose_read = recv_pose[match_name]
+
+                        byte_array[:3] = pose_read[:]
+                        byte_array = np.round(byte_array, 3)
+                        
+                        follower_pos[name] = byte_array
+
+            follower_rotation = {}
+            for name in self.follower_arms:
+                for match_name in recv_rotation:
+                    if name in match_name:
+                        byte_array = np.zeros(4, dtype=np.float32)
+                        rotation_read = recv_rotation[match_name]
+
+                        byte_array[:4] = rotation_read[:]
+                        byte_array = np.round(byte_array, 3)
+                        
+                        follower_rotation[name] = byte_array
+
+            all_trans_success = True
+            for name in self.follower_arms:
+                # print(f"Calling trans with - name: {name}, position: {follower_pos[name]}, rotation: {follower_rotation[name]}")
+
+                result = self.pika_transferorm.trans(position=follower_pos[name], rotation=follower_rotation[name], name=name)
+
+                if result is None:
+                    all_trans_success = False
+
+            if all_trans_success == True:
+                break
+
+            time.sleep(0.033)  # 等待33毫秒，约30FPS
+
+            if time.perf_counter() - start_time > timeout:
+                raise TimeoutError("获取初始位姿和旋转角度超时，请检查设备连接状态。")
+        
         self.is_connected = True
     
     @property

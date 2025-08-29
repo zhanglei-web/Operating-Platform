@@ -1,5 +1,5 @@
 [project]
-name = "dorobot-robot-pika-v1"
+name = "dr-robot-pika-v1"
 version = "0.1.0"
 description = ""
 authors = [
@@ -13,6 +13,9 @@ dependencies = [
     "opencv-python>=4.10.0",
     "pyzmq",
 ]
+
+[tool.setuptools]
+packages = []
 
 [build-system]
 requires = ["setuptools>=42", "wheel"]

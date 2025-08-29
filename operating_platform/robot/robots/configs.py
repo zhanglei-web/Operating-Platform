@@ -87,10 +87,6 @@ class ManipulatorRobotConfig(RobotConfig):
 @RobotConfig.register_subclass("aloha")
 @dataclass
 class AlohaRobotConfig(RobotConfig):
-    start_pose = [-90.0, 90.0, 90.0, -90.0, 0.0, 0.0, 0.0]
-    joint_p_limit = [169.0, 102.0, 169.0, 52.0, 169.0, 117.0, 169.0]
-    joint_n_limit = [-169.0, -102.0, -169.0, -167.0, -169.0, -87.0, -169.0]
-
     right_leader_arm = PiperMotorsBusConfig(
         port="can_right",
         motors={
@@ -169,6 +165,15 @@ class AlohaRobotConfig(RobotConfig):
             # ),
         }
     )
+
+    microphones: dict[str, int] = field(
+        default_factory=lambda: {
+            # "audio_right": 2,
+            # "audio_left": 4,
+        }
+    )
+
+    use_videos: bool = False
 
 
 @RobotConfig.register_subclass("adora")
@@ -397,41 +402,73 @@ class PikaV1RobotConfig(RobotConfig):
 
     cameras: dict[str, CameraConfig] = field(
         default_factory=lambda: {
+            "image_top": OpenCVCameraConfig(
+                camera_index=0,
+                fps=30,
+                width=640,
+                height=480,
+            ),
             "image_right": OpenCVCameraConfig(
                 camera_index=1,
                 fps=30,
                 width=640,
                 height=480,
             ),
-            # "image_left": OpenCVCameraConfig(
-            #     camera_index=2,
+            "image_left": OpenCVCameraConfig(
+                camera_index=2,
+                fps=30,
+                width=640,
+                height=480,
+            ),
+            # "image_right_fisheye": OpenCVCameraConfig(
+            #     camera_index=3,
             #     fps=30,
             #     width=640,
             #     height=480,
             # ),
-            "image_right_fisheye": OpenCVCameraConfig(
-                camera_index=3,
-                fps=30,
-                width=640,
-                height=480,
-            ),
-            "image_left_fisheye": OpenCVCameraConfig(
-                camera_index=4,
-                fps=30,
-                width=640,
-                height=480,
-            ),
-            "image_right_tac_l": OpenCVCameraConfig(
+            # "image_left_fisheye": OpenCVCameraConfig(
+            #     camera_index=4,
+            #     fps=30,
+            #     width=640,
+            #     height=480,
+            # ),
+            "image_right_tac_r": OpenCVCameraConfig(
                 camera_index=5,
                 fps=30,
                 width=640,
                 height=480,
             ),
-            "image_pika_pose": OpenCVCameraConfig(
-                camera_index=6,
+            # "image_right_tac_l": OpenCVCameraConfig(
+            #     camera_index=6,
+            #     fps=30,
+            #     width=640,
+            #     height=480,
+            # ),
+            # "image_left_tac_r": OpenCVCameraConfig(
+            #     camera_index=7,
+            #     fps=30,
+            #     width=640,
+            #     height=480,
+            # ),
+            "image_left_tac_l": OpenCVCameraConfig(
+                camera_index=8,
                 fps=30,
-                width=1280,
-                height=960,
+                width=640,
+                height=480,
+            ),
+            "image_pika_pose": OpenCVCameraConfig(
+                camera_index=9,
+                fps=30,
+                width=640,
+                height=480,
             ),
         }
     )
+
+    microphones: dict[str, int] = field(
+        default_factory=lambda: {
+            "audio_right": 2,
+            "audio_left": 4,
+        }
+    )
+

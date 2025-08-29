@@ -11,61 +11,83 @@ def get_today_date():
     date_string = today.strftime("%Y%m%d")
     return date_string
 
-def file_size(path,n):
+ 
+def get_directory_size(directory):
+    """递归计算文件夹的总大小（字节）"""
+    total_size = 0
+    for dirpath, _, filenames in os.walk(directory):
+        for filename in filenames:
+            file_path = os.path.join(dirpath, filename)
+            # 忽略无效链接（可选）
+            if not os.path.exists(file_path):
+                continue
+            total_size += os.path.getsize(file_path)
+    return total_size
+
+def file_size(path, n):
     has_directory = False
     has_file = False
-    file_size = 0
+    file_size_bytes = 0
 
-    # 获取目录中的所有条目
     pre_entries = os.listdir(path)
+    if not pre_entries:  # 空目录情况
+        return 0
 
+    # 检查路径下是否有文件或目录
     for entry in pre_entries:
         entry_path = os.path.join(path, entry)
         if os.path.isdir(entry_path):
             has_directory = True
         elif os.path.isfile(entry_path):
             has_file = True
-        break
+        break  # 只需要检查第一个条目
+
     if has_file:
         for file_name in pre_entries:
-            # 分割文件名和扩展名
-            base, ext = file_name.split(".")
-            # 分割前缀和数字部分
+            base, ext = os.path.splitext(file_name)
+            if not ext:
+                continue
+            if "_" not in base:
+                continue
             prefix, old_num = base.rsplit("_", 1)
-            # 计算数字部分的位数
             num_digits = len(old_num)
-            # 格式化新数字，保持位数（用 zfill 补零）
             new_num = str(n).zfill(num_digits)
-            # 重新组合文件名
-            new_file_name = f"{prefix}_{new_num}.{ext}"
-            break
-        file_path = os.path.join(path,new_file_name)
-        #print(file_path)
-        file_size += os.path.getsize(file_path)  # 获取文件大小（字节）
-        return file_size
-
-    if has_directory:
-        # 遍历子目录，查找第 n 个文件
-        for subdir in pre_entries:
-            pre_entry =  os.listdir(os.path.join(path,subdir))
-            for file_name in pre_entry:
-                # 分割文件名和扩展名
-                base, ext = file_name.split(".")
-                # 分割前缀和数字部分
-                prefix, old_num = base.rsplit("_", 1)
-                # 计算数字部分的位数
-                num_digits = len(old_num)
-                # 格式化新数字，保持位数（用 zfill 补零）
-                new_num = str(n).zfill(num_digits)
-                # 重新组合文件名
-                new_file_name = f"{prefix}_{new_num}.{ext}"
+            new_file_name = f"{prefix}_{new_num}{ext}"
+            file_path = os.path.join(path, new_file_name)
+            if os.path.isfile(file_path):
+                file_size_bytes += os.path.getsize(file_path)
                 break
-            
-            file_path = os.path.join(path,subdir,new_file_name)
-            #print(file_path)
-            file_size += os.path.getsize(file_path)  # 获取文件大小（字节）
-        return file_size
-                                
+        return file_size_bytes
+
+    elif has_directory:
+        for subdir in pre_entries:
+            subdir_path = os.path.join(path, subdir)
+            if not os.path.isdir(subdir_path):
+                continue
+                
+            # 先检查子目录中的文件
+            found = False
+            for file_name in os.listdir(subdir_path):
+                base, ext = os.path.splitext(file_name)
+                if "_" not in base:
+                    continue
+                prefix, old_num = base.rsplit("_", 1)
+                num_digits = len(old_num)
+                new_num = str(n).zfill(num_digits)
+                new_file_name = f"{prefix}_{new_num}{ext}"
+                file_path = os.path.join(subdir_path, new_file_name)
+                if os.path.isfile(file_path):
+                    file_size_bytes += os.path.getsize(file_path)
+                    found = True
+                    break
+                # 如果没找到文件，递归检查子目录
+                if not found:
+                    file_size_bytes += get_directory_size(file_path)
+                break
+                
+        return file_size_bytes
+
+    return 0
 
 def get_data_size(fold_path, data): # 文件大小单位(MB)
     try:
@@ -96,9 +118,21 @@ def get_data_size(fold_path, data): # 文件大小单位(MB)
         for entry in entries_1:
             if entry == "meta":
                 continue
-            data_path = os.path.join(task_path,entry,"chunk-000")
-            size_bytes += file_size(data_path,episode_index)
-        size_mb = round(size_bytes / (1024 * 1024),2)
+            if entry == "videos":
+                if "images" in entries_1:
+                    continue
+                data_path = os.path.join(task_path,entry,"chunk-000")
+                size_bytes += file_size(data_path,episode_index)
+            if entry == "images":
+                data_path = os.path.join(task_path,entry)
+                size_bytes += file_size(data_path,episode_index)
+            if entry == "data":
+                data_path = os.path.join(task_path,entry,"chunk-000")
+                size_bytes += file_size(data_path,episode_index)
+            if entry == "audio":
+                data_path = os.path.join(task_path,entry,"chunk-000")
+                size_bytes += file_size(data_path,episode_index)
+        size_mb = round(size_bytes / (1024 * 1024), 2)
         return size_mb
 
 
@@ -164,6 +198,42 @@ def update_dataid_json(path, episode_index, data):
     with open(opdata_path, 'a', encoding='utf-8') as f:
         # 写入一行 JSON 数据（每行一个 JSON 对象）
         f.write(json.dumps(append_data, ensure_ascii=False) + '\n')
+
+def find_epindex_from_dataid_json(path: str, task_data_id: str) -> int:
+    """
+    根据 task_data_id 从 op_dataid.jsonl 文件中查询对应的 episode_index
+    
+    Args:
+        path: 数据根目录路径（包含 meta 子目录）
+        task_data_id: 需要查询的任务数据ID
+    
+    Returns:
+        int: 对应的 episode_index 值
+        
+    Raises:
+        FileNotFoundError: 当 op_dataid.jsonl 文件不存在时
+        ValueError: 当指定 task_data_id 未找到时
+    """
+    opdata_path = os.path.join(path, "meta", "op_dataid.jsonl")
+    
+    if not os.path.exists(opdata_path):
+        raise FileNotFoundError(f"元数据文件不存在: {opdata_path}")
+    
+    # 规范化 task_data_id 类型（确保字符串比较）
+    target_id = str(task_data_id).strip()
+    
+    with open(opdata_path, 'r', encoding='utf-8') as f:
+        for line in f:
+            try:
+                record = json.loads(line.strip())
+                # 严格匹配 dataid 字段（考虑大小写和空格）
+                if str(record.get("dataid", "")).strip() == target_id:
+                    return int(record["episode_index"])
+            except (json.JSONDecodeError, KeyError, ValueError) as e:
+                # 跳过无效行但记录警告（实际项目中可添加日志）
+                continue
+    
+    raise ValueError(f"未找到 task_data_id={task_data_id} 对应的 episode_index")
 
 def delete_dataid_json(path, episode_index, data):
     opdata_path = os.path.join(path, "meta", "op_dataid.jsonl")
