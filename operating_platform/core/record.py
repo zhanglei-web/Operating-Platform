@@ -117,21 +117,17 @@ class Record:
                     num_processes=record_cfg.num_image_writer_processes,
                     num_threads=record_cfg.num_image_writer_threads_per_camera * len(robot.cameras),
                 )
-            if len(robot.microphones) > 0:
-                self.dataset.start_audio_writer(
-                    microphones=robot.microphones,
-                )
             sanity_check_dataset_robot_compatibility(self.dataset, robot, record_cfg.fps, record_cfg.video)
         else:
             # Create empty dataset or load existing saved episodes
             # sanity_check_dataset_name(record_cfg.repo_id, record_cfg.policy)
+            print(1)
             self.dataset = DoRobotDataset.create(
                 record_cfg.repo_id,
                 record_cfg.fps,
                 root=record_cfg.root,
                 robot=robot,
                 use_videos=record_cfg.video,
-                use_audios=len(robot.microphones) > 0,
                 image_writer_processes=record_cfg.num_image_writer_processes,
                 image_writer_threads=record_cfg.num_image_writer_threads_per_camera * len(robot.cameras),
             )
@@ -149,6 +145,7 @@ class Record:
                 start_loop_t = time.perf_counter()
 
                 observation = self.daemon.get_observation()
+                print(observation['observation.state.wrist'])
                 action = self.daemon.get_obs_action()
 
                 frame = {**observation, **action, "task": self.record_cfg.single_task}
@@ -158,13 +155,13 @@ class Record:
 
                 if self.fps is not None:
                     busy_wait(1 / self.fps - dt_s)
+                    # print(1 / self.fps - dt_s)
 
 
     def stop(self):
         if self.running == True:
             self.running = False
             self.thread.join()
-            self.dataset.stop_audio_writer()
 
         # stop_recording(robot, listener, record_cfg.display_cameras)
         # log_say("Stop recording", record_cfg.play_sounds, blocking=True)
@@ -202,7 +199,7 @@ class Record:
                 "camera_frame_rate": "pass",
             }
         }
-
+        
         self.record_complete = True
         self.last_record_episode_index = episode_index
 

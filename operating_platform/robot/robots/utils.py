@@ -22,6 +22,7 @@ from operating_platform.robot.robots.configs import (
     AdoraRobotConfig,
     AdoraDualRobotConfig,
     RealmanRobotConfig,
+    DexterousHandRobotConfig, 
 )
 import platform
 import time
@@ -105,6 +106,8 @@ def make_robot_config(robot_type: str, **kwargs) -> RobotConfig:
         return AdoraDualRobotConfig(**kwargs)
     elif robot_type == "realman":
         return RealmanRobotConfig(**kwargs)
+    elif robot_type == "dexterous_hand_v1":  
+        return DexterousHandRobotConfig(**kwargs)  
     else:
         raise ValueError(f"Robot type '{robot_type}' is not available.")
 
@@ -129,6 +132,10 @@ def make_robot_from_config(config: RobotConfig):
     #     from lerobot.common.robot_devices.robots.adora_dual_manipulator import AdoraDualManipulator
     #     print("In AdoraDualRobotConfig")
     #     return AdoraDualManipulator(config)
+    elif isinstance(config, DexterousHandRobotConfig):   
+        from operating_platform.robot.robots.dexterous_hand_v1.manipulator import DexterousHandManipulator  
+        print("In DexterousHandManipulator")  
+        return DexterousHandManipulator(config)
     else:
         print("Not match robot")
         raise ValueError(f"Robot type is not available.")
