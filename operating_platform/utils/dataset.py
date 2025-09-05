@@ -35,7 +35,6 @@ EPISODES_STATS_PATH = "meta/episodes_stats.jsonl"
 TASKS_PATH = "meta/tasks.jsonl"
 
 DEFAULT_VIDEO_PATH = "videos/chunk-{episode_chunk:03d}/{video_key}/episode_{episode_index:06d}.mp4"
-DEFAULT_AUDIO_PATH = "audio/chunk-{episode_chunk:03d}/{audio_key}/episode_{episode_index:06d}.wav"
 DEFAULT_PARQUET_PATH = "data/chunk-{episode_chunk:03d}/episode_{episode_index:06d}.parquet"
 DEFAULT_IMAGE_PATH = "images/{image_key}/episode_{episode_index:06d}/frame_{frame_index:06d}.png"
 
@@ -303,8 +302,6 @@ def get_hf_features_from_features(features: dict) -> datasets.Features:
     for key, ft in features.items():
         if ft["dtype"] == "video":
             continue
-        elif ft["dtype"] == "audio":
-            continue
         elif ft["dtype"] == "image":
             hf_features[key] = datasets.Image()
         elif ft["shape"] == (1,):
@@ -375,7 +372,6 @@ def create_empty_dataset_info(
     robot_type: str,
     features: dict,
     use_videos: bool,
-    use_audios: bool,
 ) -> dict:
     return {
         "codebase_version": codebase_version,
@@ -391,7 +387,6 @@ def create_empty_dataset_info(
         "splits": {},
         "data_path": DEFAULT_PARQUET_PATH,
         "video_path": DEFAULT_VIDEO_PATH if use_videos else None,
-        "audio_path": DEFAULT_AUDIO_PATH if use_audios else None,
         "features": features,
     }
 
@@ -644,13 +639,7 @@ class IterableNamespace(SimpleNamespace):
 
 def validate_frame(frame: dict, features: dict):
     optional_features = {"timestamp"}
-
-    excluded_features = {
-        key for key in features
-        if key.startswith("observation.audio")
-    }
-
-    expected_features = (set(features) - set(DEFAULT_FEATURES.keys()) - set(excluded_features))| {"task"}
+    expected_features = (set(features) - set(DEFAULT_FEATURES.keys())) | {"task"}
     actual_features = set(frame.keys())
 
     error_message = validate_features_presence(actual_features, expected_features, optional_features)

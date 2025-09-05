@@ -121,7 +121,7 @@ class Record:
         else:
             # Create empty dataset or load existing saved episodes
             # sanity_check_dataset_name(record_cfg.repo_id, record_cfg.policy)
-            print(1)
+            # print(1)
             self.dataset = DoRobotDataset.create(
                 record_cfg.repo_id,
                 record_cfg.fps,
@@ -145,7 +145,7 @@ class Record:
                 start_loop_t = time.perf_counter()
 
                 observation = self.daemon.get_observation()
-                print(observation['observation.state.wrist'])
+                # print(observation['observation.state.wrist'])
                 action = self.daemon.get_obs_action()
 
                 frame = {**observation, **action, "task": self.record_cfg.single_task}

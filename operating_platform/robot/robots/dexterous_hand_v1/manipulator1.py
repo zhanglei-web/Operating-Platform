@@ -178,40 +178,7 @@ def image_recv_server():
                         recv_images[event_id] = frame  
                           
                 else:    
-                    print(f"Failed to decode image for event_id: {event_id}, buffer size: {len(buffer_bytes)}")
-                
-            if 'external_image' in event_id:    
-                img_array = np.frombuffer(buffer_bytes, dtype=np.uint8)  
-                  
-                # 从 metadata 获取图像信息，如果没有则使用默认值  
-                encoding = metadata.get("encoding", "bgr8").lower()  
-                width = metadata.get("width", 640)  
-                height = metadata.get("height", 480)  
-  
-                if encoding == "bgr8":  
-                    channels = 3  
-                    frame = (  
-                        img_array.reshape((height, width, channels))  
-                        .copy()  # Copy So that we can add annotation on the image  
-                    )  
-                elif encoding == "rgb8":  
-                    channels = 3  
-                    frame = (img_array.reshape((height, width, channels)))  
-                    frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)  
-                elif encoding in ["jpeg", "jpg", "jpe", "bmp", "webp", "png"]:  
-                    channels = 3  
-                    frame = cv2.imdecode(img_array, cv2.IMREAD_COLOR)  
-                else:  
-                    # 默认处理为 bgr8  
-                    frame = (img_array.reshape((height, width, 3)).copy())  
-                  
-                # 最终转换为 RGB 格式存储  
-                if frame is not None:  
-                    # frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)  
-                    with lock:      
-                        recv_images[event_id] = frame    
-                else:    
-                    print(f"Failed to decode image for event_id: {event_id}, buffer size: {len(buffer_bytes)}")
+                    print(f"Failed to decode image for event_id: {event_id}, buffer size: {len(buffer_bytes)}") 
                    
         except zmq.Again:    
             continue    
@@ -219,94 +186,13 @@ def image_recv_server():
             print("recv error:", e)    
             break
 
-# def recv_server():    
-#     while True:    
-#         try:   
-#             message_parts = socket.recv_multipart()  
-#             if len(message_parts) < 1:    
-#                 continue    
-    
-#             event_id = message_parts[0].decode('utf-8')  
-#             buffer_bytes = message_parts[1]  
-#             # print(len(buffer_bytes))
-#             # print(1)
-#             # 检查是否有第三个部分（metadata）  
-#             metadata = {}  
-#             if len(message_parts) >= 3:  
-#                 try:  
-#                     metadata = json.loads(message_parts[2].decode('utf-8'))  
-#                 except:  
-#                     metadata = {}  
-    
-#             if 'wrist_left' in event_id:    
-#                 pose_data = np.frombuffer(buffer_bytes, dtype=np.float32) 
-#                 with lock:    
-#                     recv_wrist_data[event_id] = pose_data  
-#             elif 'wrist_right' in event_id:    
-#                 pose_data = np.frombuffer(buffer_bytes, dtype=np.float32)  
-#                 with lock:    
-#                     recv_wrist_data[event_id] = pose_data   
-    
-#             elif 'finger_left' in event_id:    
-#                 finger_data = np.frombuffer(buffer_bytes, dtype=np.float32)    
-#                 with lock:    
-#                     recv_finger_data[event_id] = finger_data  
-#             elif 'finger_right' in event_id:    
-#                 finger_data = np.frombuffer(buffer_bytes, dtype=np.float32)  
-#                 with lock:    
-#                     recv_finger_data[event_id] = finger_data   
-    
-#             elif 'head' in event_id:    
-#                 head_data = np.frombuffer(buffer_bytes, dtype=np.float32)    
-#                 with lock:    
-#                     recv_head_data[event_id] = head_data    
-    
-#             elif 'image' in event_id:    
-#                 img_array = np.frombuffer(buffer_bytes, dtype=np.uint8)  
-                  
-#                 # 从 metadata 获取图像信息，如果没有则使用默认值  
-#                 encoding = metadata.get("encoding", "bgr8").lower()  
-#                 width = metadata.get("width", 640)  
-#                 height = metadata.get("height", 480)  
-  
-#                 if encoding == "bgr8":  
-#                     channels = 3  
-#                     frame = (  
-#                         img_array.reshape((height, width, channels))  
-#                         .copy()  # Copy So that we can add annotation on the image  
-#                     )  
-#                 elif encoding == "rgb8":  
-#                     channels = 3  
-#                     frame = (img_array.reshape((height, width, channels)))  
-#                     frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)  
-#                 elif encoding in ["jpeg", "jpg", "jpe", "bmp", "webp", "png"]:  
-#                     channels = 3  
-#                     frame = cv2.imdecode(img_array, cv2.IMREAD_COLOR)  
-#                 else:  
-#                     # 默认处理为 bgr8  
-#                     frame = (img_array.reshape((height, width, 3)).copy())  
-                  
-#                 # 最终转换为 RGB 格式存储  
-#                 if frame is not None:  
-#                     # frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)  
-#                     with lock:      
-#                         recv_images[event_id] = frame    
-#                 else:    
-#                     print(f"Failed to decode image for event_id: {event_id}, buffer size: {len(buffer_bytes)}")  
-                   
-#         except zmq.Again:    
-#             continue    
-#         except Exception as e:    
-#             print("recv error:", e)    
-#             break
-
 class MockCamera:  
     def __init__(self, shape, index):  
         self.height = shape[0]  
         self.width = shape[1]   
         self.channels = shape[2]
         self.camera_index = index
-        self.fps=30
+        self.fps=30 
 
 class DexterousHandManipulator:  
     def __init__(self, config: DexterousHandRobotConfig):  
@@ -318,6 +204,7 @@ class DexterousHandManipulator:
         camera_index=1
         for key, features in self.camera_features.items():    
             camera_name = key.replace("observation.images.", "")  
+  
             
             self.cameras[camera_name] = MockCamera(features["shape"],camera_index)
             camera_index+=1
@@ -346,14 +233,7 @@ class DexterousHandManipulator:
                 "shape": (480, 640, 3),  
                 "names": ["height", "width", "channels"],  
                 "info": None,  
-            },
-
-            "observation.images.external_image": {  
-                "shape": (480, 640, 3),  
-                "names": ["height", "width", "channels"],  
-                "info": None,  
-            }
-            
+            } 
         }  
   
     @property  

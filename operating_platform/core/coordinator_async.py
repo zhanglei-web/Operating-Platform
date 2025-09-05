@@ -29,19 +29,13 @@ from operating_platform.dataset.dorobot_dataset import *
 # from operating_platform.core._client import Coordinator
 from operating_platform.core.daemon import Daemon
 from operating_platform.core.record import Record, RecordConfig
-
-from operating_platform.robot.robots.dexterous_hand_v1.plot import DexterousHandVisualizer
+import asyncio  
+import aiohttp
 
 DEFAULT_FPS=20
 
 
-_global_visualizer = None  
-  
-def get_visualizer():  
-    global _global_visualizer  
-    if _global_visualizer is None:  
-        _global_visualizer = DexterousHandVisualizer()  
-    return _global_visualizer
+
 
 
 @cache
@@ -127,8 +121,10 @@ def cameras_to_stream_json(cameras: dict[str, int]):
 class Coordinator:
     def __init__(self, daemon: Daemon, server_url="http://localhost:8088"):
         self.server_url = server_url
-        self.sio = socketio.Client()
-        self.session = requests.Session()
+        self.sio = socketio.AsyncClient()  
+        self.session = aiohttp.ClientSession(  
+            connector=aiohttp.TCPConnector(limit=10, limit_per_host=10)  
+        ) 
 
         self.daemon = daemon
 
@@ -141,43 +137,42 @@ class Coordinator:
 
 
         self.cameras: dict[str, int] = {
-            "image_top": 1,
-            "image_depth_top": 2,
+            "image_left": 1,
+            "image_right": 2,
+            "image_external":3
         } # Default Config
         
         # 注册事件处理
-        self.sio.on('HEARTBEAT_RESPONSE', self.__on_heartbeat_response_handle)
-        self.sio.on('connect', self.__on_connect_handle)
-        self.sio.on('disconnect', self.__on_disconnect_handle)
-        self.sio.on('robot_command', self.__on_robot_command_handle)
+        self.sio.on('HEARTBEAT_RESPONSE', self.__on_heartbeat_response_handle)  
+        self.sio.on('connect', self.__on_connect_handle)  
+        self.sio.on('disconnect', self.__on_disconnect_handle)  
+        self.sio.on('robot_command', self.__on_robot_command_handle)  
 
         self.record = None
     
 ####################### Client Start/Stop ############################
-    def start(self):
-        """启动客户端"""
-        self.running = True
-        self.sio.connect(self.server_url)
-        
-        # 启动心跳线程
-        heartbeat_thread = threading.Thread(target=self.send_heartbeat)
-        heartbeat_thread.daemon = True
-        heartbeat_thread.start()
+    async def start(self):  
+        """启动客户端"""  
+        self.running = True  
+        await self.sio.connect(self.server_url)  
+        # 使用 asyncio 任务发送心跳  
+        asyncio.create_task(self.send_heartbeat_loop())
         
         # print("客户端已启动，等待连接...")
     
-    def stop(self):
-        """停止客户端"""
-        self.running = False
-        self.sio.disconnect()
+    async def stop(self):  
+        """停止客户端"""  
+        self.running = False  
+        await self.sio.disconnect()  
+        await self.session.close()  
         print("客户端已停止")
     
 ####################### Client Handle ############################
-    def __on_heartbeat_response_handle(self, data):
+    async def __on_heartbeat_response_handle(self, data):
         """心跳响应回调"""
         print("收到心跳响应:", data)
     
-    def __on_connect_handle(self):
+    async def __on_connect_handle(self):
         """连接成功回调"""
         print("成功连接到服务器")
         
@@ -191,11 +186,11 @@ class Coordinator:
         # except Exception as e:
         #     print(f"初始化视频流列表失败: {e}")
     
-    def __on_disconnect_handle(self):
+    async def __on_disconnect_handle(self):
         """断开连接回调"""
         print("与服务器断开连接")
     
-    def __on_robot_command_handle(self, data):
+    async def __on_robot_command_handle(self, data):
         """收到机器人命令回调"""
         print("收到服务器命令:", data)
         
@@ -269,7 +264,7 @@ class Coordinator:
             self.record.start()
 
             # 发送响应
-            self.send_response('start_collection', "success")
+            await self.send_response('start_collection', "success")
         
         elif data.get('cmd') == 'finish_collection':
             print("处理完成采集命令...")
@@ -293,7 +288,7 @@ class Coordinator:
             }
 
             # 发送响应
-            self.send_response('finish_collection', response_data['msg'], response_data)
+            await self.send_response('finish_collection', response_data['msg'], response_data)
         
         elif data.get('cmd') == 'discard_collection':
             # 模拟处理丢弃采集
@@ -304,7 +299,7 @@ class Coordinator:
             self.recording = False
 
             # 发送响应
-            self.send_response('discard_collection', "success")
+            await self.send_response('discard_collection', "success")
         
         elif data.get('cmd') == 'submit_collection':
             # 模拟处理提交采集
@@ -312,36 +307,35 @@ class Coordinator:
             time.sleep(0.01)  # 模拟处理时间
             
             # 发送响应
-            self.send_response('submit_collection', "success")
+            await self.send_response('submit_collection', "success")
     
 ####################### Client Send to Server ############################
-    def send_heartbeat(self):
-        """定期发送心跳"""
-        while self.running:
-            current_time = time.time()
-            if current_time - self.last_heartbeat_time >= self.heartbeat_interval:
-                try:
-                    self.sio.emit('HEARTBEAT')
-                    self.last_heartbeat_time = current_time
-                except Exception as e:
-                    print(f"发送心跳失败: {e}")
-            time.sleep(1)
-            self.sio.wait()
+    async def send_heartbeat_loop(self):  
+        """定期发送心跳"""  
+        while self.running:  
+            current_time = time.time()  
+            if current_time - self.last_heartbeat_time >= self.heartbeat_interval:  
+                try:  
+                    await self.sio.emit('HEARTBEAT')  
+                    self.last_heartbeat_time = current_time  
+                except Exception as e:  
+                    print(f"发送心跳失败: {e}")  
+            await asyncio.sleep(1)
 
     # 发送回复请求
-    def send_response(self, cmd, msg, data=None):
-        """发送回复请求到服务器"""
-        try:
-            payload = {"cmd": cmd, "msg": msg}
-            if data:
-                payload.update(data)
-            
-            response = self.session.post(
-                f"{self.server_url}/robot/response",
-                json=payload
-            )
-            print(f"已发送响应 [{cmd}]: {payload}")
-        except Exception as e:
+    async def send_response(self, cmd, msg, data=None):  
+        """发送回复请求到服务器"""  
+        payload = {"cmd": cmd, "msg": msg}  
+        if data:  
+            payload.update(data)  
+        try:  
+            async with self.session.post(  
+                f"{self.server_url}/robot/response",  
+                json=payload,  
+                timeout=aiohttp.ClientTimeout(total=2)  
+            ) as resp:  
+                print(f"已发送响应 [{cmd}]: {payload}")  
+        except Exception as e:  
             print(f"发送响应失败 [{cmd}]: {e}")
 
 ####################### Robot API ############################
@@ -349,32 +343,44 @@ class Coordinator:
         self.cameras = info.copy()
         print(f"更新摄像头信息: {self.cameras}")
 
-    def update_stream_info_to_server(self):
-        stream_info_data = cameras_to_stream_json(self.cameras)
-        print(f"stream_info_data: {stream_info_data}")
+    async def update_stream_info_to_server(self):  
+        stream_info_data = cameras_to_stream_json(self.cameras)  
+        print(f"stream_info_data: {stream_info_data}")  
+        try:  
+            async with self.session.post(  
+                f"{self.server_url}/robot/stream_info",  
+                json=stream_info_data,  
+                timeout=aiohttp.ClientTimeout(total=2)  
+            ) as response:  
+                if response.status == 200:  
+                    print("摄像头流信息已同步到服务器")  
+                else:  
+                    print(f"同步流信息失败: {response.status}")  
+        except Exception as e:  
+            print(f"同步流信息异常: {e}")
 
-        response = self.session.post(
-            f"{self.server_url}/robot/stream_info",
-            json = stream_info_data,
-        )
-
-    def update_stream(self, name, frame):
-
-        _, jpeg_frame = cv2.imencode('.jpg', frame, 
-                            [int(cv2.IMWRITE_JPEG_QUALITY), 80])
-        frame_data = jpeg_frame.tobytes()
-
-        stream_id = self.cameras[name]
-        # Build URL
-        url = f"{self.server_url}/robot/update_stream/{stream_id}"
-
-        # Send POST request
-        try:
-            response = self.session.post(url, data=frame_data)
-            if response.status_code != 200:
-                print(f"Server returned error: {response.status_code}, {response.text}")
-        except requests.exceptions.RequestException as e:
-            print(f"Request failed: {e}")
+    async def update_stream_async(self, name, frame):  
+        """异步视频流传输"""  
+        _, jpeg_frame = cv2.imencode('.jpg', frame,   
+                            [int(cv2.IMWRITE_JPEG_QUALITY), 80])  
+        frame_data = jpeg_frame.tobytes()  
+        
+        stream_id = self.cameras[name]  
+        url = f"{self.server_url}/robot/update_stream/{stream_id}"  
+        
+        try:  
+            async with self.session.post(  
+                url,   
+                data=frame_data,  
+                timeout=aiohttp.ClientTimeout(total=0.2)  
+            ) as resp:  
+                if resp.status != 200:  
+                    text = await resp.text()  
+                    print(f"Server error {resp.status}: {text}")  
+        except asyncio.TimeoutError:  
+            print("update_stream timeout")  
+        except Exception as e:  
+            print(f"update_stream exception: {e}")
 
 @dataclass
 class ControlPipelineConfig:
@@ -387,79 +393,137 @@ class ControlPipelineConfig:
         return ["control.policy"]
     
 
-@parser.wrap()
-def main(cfg: ControlPipelineConfig):
+@parser.wrap()  
+def main(cfg: ControlPipelineConfig):  
+    asyncio.run(async_main(cfg))
 
-    init_logging()
-    git_branch_log()
-    logging.info(pformat(asdict(cfg)))
+async def async_main(cfg: ControlPipelineConfig):  
+    """异步主函数"""  
+    init_logging()  
+    git_branch_log()  
+    logging.info(pformat(asdict(cfg)))  
 
-    daemon = Daemon(fps=DEFAULT_FPS)
-    daemon.start(cfg.robot)
+    daemon = Daemon(fps=DEFAULT_FPS)  
+    daemon.start(cfg.robot)  
 
-    coordinator = Coordinator(daemon)
-    coordinator.start()
+    coordinator = Coordinator(daemon)  
+    await coordinator.start()  
 
-    coordinator.stream_info(daemon.cameras_info)
-    coordinator.update_stream_info_to_server()
+    coordinator.stream_info(daemon.cameras_info)  
+    await coordinator.update_stream_info_to_server()  
 
-
-
-
-    # frame_counter = 0 
-    try:
-        while True:
-            daemon.update()
-            # print(1.0/(end-start))
-            observation = daemon.get_observation()
-            # print(observation['observation.state.wrist'])
-            # end=time.time()
-            # print(time.time())
-            if observation is not None:
-                image_keys = [key for key in observation if "image" in key]
-                for i, key in enumerate(image_keys, start=1):
-                    img = cv2.cvtColor(observation[key].numpy(), cv2.COLOR_RGB2BGR) 
-
-                    name = key[len("observation.images."):] 
-                    # if frame_counter % 3 == 0:  # 每隔一帧处理一次  
-                    #     coordinator.update_stream(name, img)  
-                    # frame_counter += 1
-
-                    if not is_headless():
-                        # print(f"will show image, name:{name}")
-                        cv2.imshow(name, img)
-                        cv2.waitKey(1)
-                        # print("show image succese")
-            # if observation is not None:  
-            #     # 直接从 daemon.robot 访问全局数据  
-            #     if hasattr(daemon.robot, '__class__') and daemon.robot.__class__.__name__ == 'DexterousHandManipulator':  
-            #         # 导入模块以访问全局变量  
-            #         from operating_platform.robot.robots.dexterous_hand_v1 import manipulator as dh_module  
-                    
-            #         # 检查数据是否存在  
-            #         has_left_wrist = 'wrist_left' in dh_module.recv_wrist_data  
-            #         has_right_wrist = 'wrist_right' in dh_module.recv_wrist_data
-            #         has_left_finger = 'finger_left' in dh_module.recv_finger_data  
-            #         has_right_finger = 'finger_right' in dh_module.recv_finger_data    
-            #         has_head = 'head_pose' in dh_module.recv_head_data  
-                    
-            #         if has_left_wrist and has_right_wrist and has_head and has_left_finger and has_right_finger:  
-            #             visualizer = get_visualizer()
+    try:  
+        while True:  
+            daemon.update()  
+            observation = daemon.get_observation()  
             
-            #             visualizer.update_poses(dh_module.recv_wrist_data, dh_module.recv_head_data,dh_module.recv_finger_data)
+            if observation is not None:  
+                tasks = []  
+                image_keys = [key for key in observation if "image" in key]  
+                
+                for key in image_keys:  
+                    img = cv2.cvtColor(observation[key].numpy(), cv2.COLOR_RGB2BGR)  
+                    name = key[len("observation.images."):]  
+                    
+                    # 添加异步视频流任务  
+                    tasks.append(coordinator.update_stream_async(name, img))  
+                    
+                    if not is_headless():  
+                        cv2.imshow(name, img)  
+                        cv2.waitKey(1)  
+                
+                # 并发执行所有视频流传输  
+                if tasks:  
+                    try:  
+                        await asyncio.wait_for(  
+                            asyncio.gather(*tasks, return_exceptions=True),  
+                            timeout=0.2  
+                        )  
+                    except asyncio.TimeoutError:  
+                        pass  
+            
+            # 让事件循环可以调度其他任务  
+            await asyncio.sleep(0)  
+            
+    except KeyboardInterrupt:  
+        print("coordinator and daemon stop")  
+    finally:  
+        daemon.stop()  
+        await coordinator.stop()  
+        cv2.destroyAllWindows()
+# @parser.wrap()
+# def main(cfg: ControlPipelineConfig):
+
+#     init_logging()
+#     git_branch_log()
+#     logging.info(pformat(asdict(cfg)))
+
+#     daemon = Daemon(fps=DEFAULT_FPS)
+#     daemon.start(cfg.robot)
+
+#     coordinator = Coordinator(daemon)
+#     coordinator.start()
+
+#     coordinator.stream_info(daemon.cameras_info)
+#     coordinator.update_stream_info_to_server()
+
+
+
+
+#     # frame_counter = 0 
+#     try:
+#         while True:
+#             daemon.update()
+#             # print(1.0/(end-start))
+#             observation = daemon.get_observation()
+#             # print(observation['observation.state.wrist'])
+#             # end=time.time()
+#             # print(time.time())
+#             if observation is not None:
+#                 image_keys = [key for key in observation if "image" in key]
+#                 for i, key in enumerate(image_keys, start=1):
+#                     img = cv2.cvtColor(observation[key].numpy(), cv2.COLOR_RGB2BGR) 
+
+#                     name = key[len("observation.images."):] 
+                     
+#                     coordinator.update_stream(name, img)  
+                    
+
+#                     if not is_headless():
+#                         # print(f"will show image, name:{name}")
+#                         cv2.imshow(name, img)
+#                         cv2.waitKey(1)
+#                         # print("show image succese")
+#             # if observation is not None:  
+#             #     # 直接从 daemon.robot 访问全局数据  
+#             #     if hasattr(daemon.robot, '__class__') and daemon.robot.__class__.__name__ == 'DexterousHandManipulator':  
+#             #         # 导入模块以访问全局变量  
+#             #         from operating_platform.robot.robots.dexterous_hand_v1 import manipulator as dh_module  
+                    
+#             #         # 检查数据是否存在  
+#             #         has_left_wrist = 'wrist_left' in dh_module.recv_wrist_data  
+#             #         has_right_wrist = 'wrist_right' in dh_module.recv_wrist_data
+#             #         has_left_finger = 'finger_left' in dh_module.recv_finger_data  
+#             #         has_right_finger = 'finger_right' in dh_module.recv_finger_data    
+#             #         has_head = 'head_pose' in dh_module.recv_head_data  
+                    
+#             #         if has_left_wrist and has_right_wrist and has_head and has_left_finger and has_right_finger:  
+#             #             visualizer = get_visualizer()
+            
+#             #             visualizer.update_poses(dh_module.recv_wrist_data, dh_module.recv_head_data,dh_module.recv_finger_data)
             
             
                      
-            # else:
-            #     print("observation is none")
+#             # else:
+#             #     print("observation is none")
             
-    except KeyboardInterrupt:
-        print("coordinator and daemon stop")
+#     except KeyboardInterrupt:
+#         print("coordinator and daemon stop")
 
-    finally:
-        daemon.stop()
-        coordinator.stop()
-        cv2.destroyAllWindows()
+#     finally:
+#         daemon.stop()
+#         coordinator.stop()
+#         cv2.destroyAllWindows()
     
 
 if __name__ == "__main__":

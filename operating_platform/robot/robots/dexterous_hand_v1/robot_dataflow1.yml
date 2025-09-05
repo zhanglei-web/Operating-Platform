@@ -13,18 +13,18 @@ nodes:
       - left_full_skeleton
       - right_full_skeleton  
   
-  - id: camera_realsense  
-    path: ../../components/camera_rgbd_realsense/main.py  
-    inputs:  
-      tick: dora/timer/millis/50  
-    outputs:  
-      - image  
-      - depth  
-    env:  
-      DEVICE_SERIAL: 337122071807
-      IMAGE_WIDTH: 640  
-      IMAGE_HEIGHT: 480 
-      # ENCODING: bgr8
+  # - id: camera_realsense  
+  #   path: ../../components/camera_rgbd_realsense/main.py  
+  #   inputs:  
+  #     tick: dora/timer/millis/33  
+  #   outputs:  
+  #     - image  
+  #     - depth  
+  #   env:  
+  #     DEVICE_SERIAL: 337122071807
+  #     IMAGE_WIDTH: 640  
+  #     IMAGE_HEIGHT: 480 
+  #     # ENCODING: bgr8
 
   - id: camera_zed  
     path: ../../components/camera_rgbd_zed/main.py  
@@ -56,7 +56,7 @@ nodes:
     inputs: 
       left_image: camera_zed/left_image
       right_image: camera_zed/right_image
-      external_image: camera_realsense/image
+      # external_image: camera_realsense/image
 
   - id: zeromq_plot  
     path: dora_zeromq_plot.py  

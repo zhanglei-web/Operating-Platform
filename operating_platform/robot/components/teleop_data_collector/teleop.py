@@ -173,7 +173,7 @@ class Vive_ZMQSubscriber:
     def _update_value(self):
         while True:
             t1=time.time()
-            message = self.socket.recv()
+            # message = self.socket.recv()
             # print("message:", message)
             self.update=False
             # print("self.update before: ",self.update)
@@ -455,32 +455,32 @@ class MocapUpperBodyTeleVisionWrapper:
 
         return head_position, head_rmat, unitree_left_wrist, unitree_right_wrist, waist_angles, unitree_left_short_skeleton, unitree_right_short_skeleton
 
-demo=MocapTeleVisionWrapper()
-# # # while(1):
-# # #     # print(demo.get_data())
-# # #     demo.get_data()
-# # #     continue
-# # start = time.time()
-time.sleep(1)
-# head_pose,left_wrist_pose,right_wrist_pose,left_finger_joints,right_finger_joints,left_full,right_full = demo.get_data()
-# old_joints=right_finger_joints
-while(1):
-    # t1=time.time()
-    head_pose,left_wrist_pose,right_wrist_pose,left_finger_joints,right_finger_joints,left_full,right_full = demo.get_data()
+# demo=MocapTeleVisionWrapper()
+# # # # while(1):
+# # # #     # print(demo.get_data())
+# # # #     demo.get_data()
+# # # #     continue
+# # # start = time.time()
+# # time.sleep(1)
+# # # head_pose,left_wrist_pose,right_wrist_pose,left_finger_joints,right_finger_joints,left_full,right_full = demo.get_data()
+# # # old_joints=right_finger_joints
+# while(1):
+#     # t1=time.time()
+#     head_pose,left_wrist_pose,right_wrist_pose,left_finger_joints,right_finger_joints,left_full,right_full = demo.get_data()
 
-    ##according to trial, manus finger hz>50
-    # end = time.time()
-    # print("delata t for record: ",end-t1)
-    # print("frequency:", 1.0 / (end - start))
-    # start = time.time()
-    # print(head_pose) 
-    # print(len(left_full)) 
-    # print(right_wrist_pose) 
-    # print(left_wrist_pose) 
-    # print(left_wrist_pose[0], left_finger_joints[0])
+#     ##according to trial, manus finger hz>50
+#     # end = time.time()
+#     # print("delata t for record: ",end-t1)
+#     # print("frequency:", 1.0 / (end - start))
+#     # start = time.time()
+#     # print(head_pose) 
+#     # print(len(left_full)) 
+#     # print(right_wrist_pose) 
+#     # print(left_wrist_pose) 
+#     print(left_wrist_pose[0], left_wrist_pose[1], left_wrist_pose[2], left_finger_joints[0])
     
     
-    print("delta right fingers: ",np.array(right_finger_joints)-np.array(old_joints))
-    old_joints=right_finger_joints
-    # time.sleep(0.033)
-    time.sleep(0.05) ##
+#     # print("delta right fingers: ",np.array(right_finger_joints)-np.array(old_joints))
+#     # old_joints=right_finger_joints
+#     # time.sleep(0.033)
+#     time.sleep(0.05) ##

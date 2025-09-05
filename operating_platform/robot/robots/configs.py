@@ -685,7 +685,7 @@ class DexterousHandRobotConfig(RobotConfig):
       
     cameras: dict[str, CameraConfig] = field(  
         default_factory=lambda: {  
-            "image": IntelRealSenseCameraConfig(  
+            "image": IntelRealSenseCameraConfig( 
                 serial_number=337122071807,  
                 fps=30,  
                 width=640,  
